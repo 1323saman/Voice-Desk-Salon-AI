@@ -1,0 +1,79 @@
+
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Business {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  apiKey    String   @unique
+  createdAt DateTime @default(now())
+
+  clients  Client[]
+  sessions Session[]
+  slots    Slot[]
+}
+
+model Client {
+  id         String   @id @default(uuid())
+  businessId String
+  name       String
+  phone      String?
+  email      String?
+  createdAt  DateTime @default(now())
+
+  business Business  @relation(fields: [businessId], references: [id])
+  sessions Session[]
+  bookings Booking[]
+}
+
+model Session {
+  id         String   @id @default(uuid())
+  businessId String
+  clientId   String?
+  createdAt  DateTime @default(now())
+
+  business Business  @relation(fields: [businessId], references: [id])
+  client   Client?   @relation(fields: [clientId], references: [id])
+  messages Message[]
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  sessionId String
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id])
+}
+
+model Slot {
+  id         String   @id @default(uuid())
+  businessId String
+  startTime  DateTime
+  endTime    DateTime
+  isBooked   Boolean  @default(false)
+
+  business Business @relation(fields: [businessId], references: [id])
+  booking  Booking?
+}
+
+model Booking {
+  id        String   @id @default(uuid())
+  slotId    String   @unique
+  clientId  String
+  status    String   @default("confirmed")
+  createdAt DateTime @default(now())
+
+  slot   Slot   @relation(fields: [slotId], references: [id])
+  client Client @relation(fields: [clientId], references: [id])
+}
