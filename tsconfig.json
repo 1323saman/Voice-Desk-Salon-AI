@@ -21,5 +21,6 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
     "types": ["node", "express", "multer"]
-  }
+  },
+  "exclude": ["node_modules", "dist", "prisma/seed.ts", "prisma/seed-slots.ts"]
 }
