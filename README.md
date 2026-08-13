@@ -1,98 +1,248 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🎙️ Voice Desk — Salon AI
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> AI-powered voice and text front-desk assistant for salons, built with NestJS, Groq, RAG, Deepgram, PostgreSQL, and Prisma.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 🚀 Overview
 
-## Description
+Voice Desk is an intelligent AI receptionist that handles customer queries through **voice and text**. It uses **Retrieval-Augmented Generation (RAG)** to retrieve relevant information from a salon knowledge base and combines it with **Groq LLMs** to generate accurate, context-aware responses.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+The system also supports real-time speech-to-text using **Deepgram**, persistent data storage with **PostgreSQL and Prisma**, automated emails through **Resend**, API documentation with **Swagger**, and application monitoring with **Sentry**.
 
-## Project setup
+## ✨ Features
 
-```bash
-$ npm install
+* 🤖 AI-powered conversational support
+* 🧠 RAG-based knowledge retrieval
+* 🎙️ Voice-to-text using Deepgram
+* 📚 Custom salon knowledge base
+* 🗄️ PostgreSQL + Prisma
+* 📧 Automated emails with Resend
+* 📖 Interactive Swagger API documentation
+* 🛡️ Sentry error monitoring
+* 💬 Voice and text interaction support
+
+## 🔄 How It Works
+
+```text
+User
+ ↓
+Voice / Text Query
+ ↓
+Deepgram Speech-to-Text
+ ↓
+RAG Knowledge Retrieval
+ ↓
+Groq LLM
+ ↓
+Grounded AI Response
+ ↓
+PostgreSQL + Prisma
+ ↓
+Optional Email via Resend
 ```
 
-## Compile and run the project
+For voice requests, Deepgram first converts the user's speech into text. The query is then processed through the RAG pipeline, which retrieves relevant information from the knowledge base. Groq generates the final response using the retrieved context.
 
-```bash
-# development
-$ npm run start
+## 🛠️ Tech Stack
 
-# watch mode
-$ npm run start:dev
+* **Backend:** NestJS, TypeScript
+* **LLM:** Groq API
+* **Embeddings:** OpenAI
+* **Speech-to-Text:** Deepgram
+* **Database:** PostgreSQL
+* **ORM:** Prisma
+* **Vector Search:** pgvector
+* **Email:** Resend
+* **API Documentation:** Swagger
+* **Monitoring:** Sentry
 
-# production mode
-$ npm run start:prod
+## 📁 Project Structure
+
+```text
+src/
+├── chat/              # AI chat functionality
+├── deepgram/          # Speech-to-text integration
+├── email/             # Email services
+├── rag/               # RAG and knowledge retrieval
+├── voice/             # Voice endpoints
+├── prisma/            # Prisma database service
+├── common/            # Shared utilities and filters
+└── main.ts            # Application entry point
+
+prisma/
+├── migrations/        # Database migrations
+├── schema.prisma      # Prisma schema
+└── seed.ts            # Database seed
+
+public/
+├── index.html
+└── voice-test.html
 ```
 
-## Run tests
+## ⚙️ Installation
+
+### 1. Clone the repository
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+git clone https://github.com/1323saman/Voice-Desk-Salon-AI.git
+cd Voice-Desk-Salon-AI
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### 2. Install dependencies
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm install
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### 3. Configure environment variables
 
-## Resources
+Create a `.env` file in the project root:
 
-Check out a few resources that may come in handy when working with NestJS:
+```env
+DATABASE_URL="your_postgresql_database_url"
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+GROQ_API_KEY="your_groq_api_key"
+OPENAI_API_KEY="your_openai_api_key"
+DEEPGRAM_API_KEY="your_deepgram_api_key"
 
-## Support
+RESEND_API_KEY="your_resend_api_key"
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+SENTRY_DSN="your_sentry_dsn"
+```
 
-## Stay in touch
+> Never commit your `.env` file or expose API keys publicly.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### 4. Setup Prisma
 
-## License
+```bash
+npx prisma generate
+npx prisma migrate dev
+```
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+### 5. Start the application
+
+Development mode:
+
+```bash
+npm run start:dev
+```
+
+The application runs at:
+
+```text
+http://localhost:3000
+```
+
+## 📖 Swagger API
+
+Swagger documentation is available at:
+
+```text
+http://localhost:3000/api
+```
+
+Swagger provides an interactive interface for testing the available API endpoints.
+
+## 🎙️ Voice Testing
+
+The project includes a browser-based voice testing page:
+
+```text
+http://localhost:3000/voice-test.html
+```
+
+It can be used to test the voice interaction flow with the backend.
+
+## 🧠 RAG Pipeline
+
+The RAG pipeline allows the AI to generate responses using information stored in the application's knowledge base.
+
+```text
+User Query
+    ↓
+Generate Embedding
+    ↓
+Vector Similarity Search
+    ↓
+Retrieve Relevant Knowledge
+    ↓
+Build Context
+    ↓
+Groq LLM
+    ↓
+AI Response
+```
+
+This helps produce responses based on real business information instead of relying only on the model's general knowledge.
+
+## 🔐 Environment Variables
+
+| Variable           | Purpose               |
+| ------------------ | --------------------- |
+| `DATABASE_URL`     | PostgreSQL connection |
+| `GROQ_API_KEY`     | Groq LLM access       |
+| `OPENAI_API_KEY`   | Embedding generation  |
+| `DEEPGRAM_API_KEY` | Speech-to-text        |
+| `RESEND_API_KEY`   | Email delivery        |
+| `SENTRY_DSN`       | Error monitoring      |
+
+## 📌 API Modules
+
+The backend includes modules for:
+
+* **Chat** — AI conversational responses
+* **Voice** — Voice interaction
+* **Deepgram** — Speech-to-text processing
+* **RAG** — Knowledge retrieval
+* **Email** — Automated email operations
+* **Prisma** — Database access
+
+## 🧪 Development
+
+Build the project:
+
+```bash
+npm run build
+```
+
+Run tests:
+
+```bash
+npm run test
+```
+
+Run end-to-end tests:
+
+```bash
+npm run test:e2e
+```
+
+Run linting:
+
+```bash
+npm run lint
+```
+
+## 🔮 Future Improvements
+
+* Appointment booking
+* Customer authentication
+* WhatsApp integration
+* Appointment reminders
+* Admin dashboard
+* Conversation analytics
+* Multi-language voice support
+* Online payments
+
+## 👨‍💻 Author
+
+**Saman**
+
+GitHub: https://github.com/1323saman
+
+## ⭐ Project
+
+If you find this project useful, consider giving the repository a ⭐.
+
+---
+
+Built with **NestJS · Groq · RAG · Deepgram · PostgreSQL · Prisma · Resend · Swagger · Sentry**
