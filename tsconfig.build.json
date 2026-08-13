@@ -5,6 +5,8 @@
     "test",
     "dist",
     "api",
-    "**/*spec.ts"
+    "**/*spec.ts",
+    "prisma/seed.ts",
+    "prisma/seed-slots.ts"
   ]
 }
