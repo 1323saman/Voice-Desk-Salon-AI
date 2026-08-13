@@ -1,4 +1,3 @@
-
 import {
   Body,
   Controller,
@@ -6,12 +5,14 @@ import {
   HttpStatus,
   Post,
 } from '@nestjs/common';
+
 import {
   ApiBody,
   ApiOperation,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+
 import { ChatService } from './chat.service';
 import { SendMessageDto } from './send-message.dto';
 
@@ -27,8 +28,9 @@ export class ChatController {
   @ApiOperation({
     summary:
       'Send a message to the AI receptionist and get a reply',
+
     description:
-      'Allows customers to check availability, book appointments, and cancel bookings using the AI receptionist.',
+      'Allows customers to check availability, book appointments, and cancel bookings while maintaining conversation memory using a session ID.',
   })
   @ApiBody({
     type: SendMessageDto,
@@ -48,7 +50,7 @@ export class ChatController {
   @ApiResponse({
     status: 400,
     description:
-      'Invalid request. The message is missing or invalid.',
+      'Invalid request. The message or session ID is missing.',
   })
   @ApiResponse({
     status: 500,
@@ -61,6 +63,7 @@ export class ChatController {
     try {
       const reply =
         await this.chatService.getReply(
+          body.sessionId,
           body.message,
         );
 

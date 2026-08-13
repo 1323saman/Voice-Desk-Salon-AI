@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>Glow Salon Voice Test</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 650px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+
+    button {
+      padding: 12px 20px;
+      margin: 5px;
+      cursor: pointer;
+    }
+
+    #status {
+      margin: 20px 0;
+      font-weight: bold;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 20px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>🎙️ Glow Salon Voice Test</h1>
+
+  <label>
+    Session ID
+  </label>
+
+  <input
+    id="sessionId"
+    value="voice-test-001"
+    style="width:100%; padding:10px;"
+  />
+
+  <br><br>
+
+  <button id="startButton">
+    🎙️ Start Recording
+  </button>
+
+  <button
+    id="stopButton"
+    disabled
+  >
+    ⏹️ Stop Recording
+  </button>
+
+  <button
+    id="sendButton"
+    disabled
+  >
+    📤 Send to AI
+  </button>
+
+  <div id="status">
+    Ready
+  </div>
+
+  <audio
+    id="recording"
+    controls
+  ></audio>
+
+  <h3>Transcript</h3>
+
+  <textarea
+    id="transcript"
+    readonly
+  ></textarea>
+
+  <h3>AI Reply</h3>
+
+  <textarea
+    id="reply"
+    readonly
+  ></textarea>
+
+  <script>
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let audioBlob = null;
+
+    const startButton =
+      document.getElementById('startButton');
+
+    const stopButton =
+      document.getElementById('stopButton');
+
+    const sendButton =
+      document.getElementById('sendButton');
+
+    const status =
+      document.getElementById('status');
+
+    const recording =
+      document.getElementById('recording');
+
+    const transcript =
+      document.getElementById('transcript');
+
+    const reply =
+      document.getElementById('reply');
+
+    const sessionId =
+      document.getElementById('sessionId');
+
+    startButton.onclick = async () => {
+
+      try {
+
+        const stream =
+          await navigator.mediaDevices.getUserMedia({
+            audio: true
+          });
+
+        audioChunks = [];
+
+        mediaRecorder =
+          new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable =
+          (event) => {
+
+            if (event.data.size > 0) {
+              audioChunks.push(event.data);
+            }
+
+          };
+
+        mediaRecorder.onstop = () => {
+
+          audioBlob =
+            new Blob(
+              audioChunks,
+              {
+                type: 'audio/webm'
+              }
+            );
+
+          recording.src =
+            URL.createObjectURL(audioBlob);
+
+          sendButton.disabled = false;
+
+          status.textContent =
+            'Recording stopped. Ready to send.';
+
+          stream
+            .getTracks()
+            .forEach(track => track.stop());
+
+        };
+
+        mediaRecorder.start();
+
+        status.textContent =
+          '🔴 Recording... Speak now.';
+
+        startButton.disabled = true;
+        stopButton.disabled = false;
+        sendButton.disabled = true;
+
+      } catch (error) {
+
+        console.error(error);
+
+        status.textContent =
+          'Microphone permission failed: ' +
+          error.message;
+
+      }
+
+    };
+
+
+    stopButton.onclick = () => {
+
+      if (
+        mediaRecorder &&
+        mediaRecorder.state !== 'inactive'
+      ) {
+
+        mediaRecorder.stop();
+
+        startButton.disabled = false;
+        stopButton.disabled = true;
+
+      }
+
+    };
+
+
+    sendButton.onclick = async () => {
+
+      if (!audioBlob) {
+        return;
+      }
+
+      status.textContent =
+        '⏳ Sending audio to AI...';
+
+      sendButton.disabled = true;
+
+      const formData =
+        new FormData();
+
+      formData.append(
+        'sessionId',
+        sessionId.value
+      );
+
+      formData.append(
+        'audio',
+        audioBlob,
+        'recording.webm'
+      );
+
+      try {
+
+        const response =
+          await fetch(
+            '/chat/voice',
+            {
+              method: 'POST',
+              body: formData
+            }
+          );
+
+        const data =
+          await response.json();
+
+        console.log(
+          'Voice response:',
+          data
+        );
+
+        transcript.value =
+          data.transcript || '';
+
+        reply.value =
+          data.reply || '';
+
+        if (data.audioBase64) {
+
+          const audioBytes =
+            Uint8Array.from(
+              atob(data.audioBase64),
+              char => char.charCodeAt(0)
+            );
+
+          const audioBlobResponse =
+            new Blob(
+              [audioBytes],
+              {
+                type: 'audio/mpeg'
+              }
+            );
+
+          const audioUrl =
+            URL.createObjectURL(
+              audioBlobResponse
+            );
+
+          const aiAudio =
+            document.createElement('audio');
+
+          aiAudio.controls = true;
+          aiAudio.autoplay = true;
+          aiAudio.src = audioUrl;
+
+          document.body.appendChild(
+            aiAudio
+          );
+
+        }
+
+        status.textContent =
+          '✅ Voice request completed.';
+
+      } catch (error) {
+
+        console.error(error);
+
+        status.textContent =
+          '❌ Voice request failed: ' +
+          error.message;
+
+        sendButton.disabled = false;
+
+      }
+
+    };
+
+  </script>
+
+</body>
+</html>

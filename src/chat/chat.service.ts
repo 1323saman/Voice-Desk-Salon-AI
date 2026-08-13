@@ -1,8 +1,9 @@
-
 import { Injectable } from '@nestjs/common';
 import Groq from 'groq-sdk';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
+import { RagService } from '../rag/rag.service';
 
 @Injectable()
 export class ChatService {
@@ -11,20 +12,37 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    private readonly ragService: RagService,
   ) {
     this.groq = new Groq({
       apiKey: process.env.GROQ_API_KEY,
     });
   }
 
-  async getReply(message: string): Promise<string> {
+  async getReply(
+    sessionId: string,
+    message: string,
+  ): Promise<string> {
+    if (!process.env.GROQ_API_KEY) {
+      console.error('GROQ_API_KEY is not configured.');
+      return 'The AI service is not configured correctly.';
+    }
+
+    if (!sessionId?.trim()) {
+      return 'A session ID is required.';
+    }
+
+    if (!message?.trim()) {
+      return 'Please enter a message.';
+    }
+
     const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
       {
         type: 'function',
         function: {
           name: 'checkAvailability',
           description:
-            'Get currently available appointment slots. Use this when the customer asks about available appointment times or when you need to find a slot for a requested appointment time.',
+            'Get currently available future appointment slots.',
           parameters: {
             type: 'object',
             properties: {},
@@ -32,27 +50,30 @@ export class ChatService {
           },
         },
       },
+
       {
         type: 'function',
         function: {
           name: 'bookSlot',
           description:
-            'Book an available appointment slot for a client. Use this after finding the correct slot and having the client name and email.',
+            'Book an available appointment slot for a client.',
           parameters: {
             type: 'object',
             properties: {
               slotId: {
                 type: 'string',
                 description:
-                  'The exact ID of the available slot to book',
+                  'The exact ID of the available slot.',
               },
               clientName: {
                 type: 'string',
-                description: 'Full name of the client',
+                description:
+                  'Full name of the client.',
               },
               clientEmail: {
                 type: 'string',
-                description: 'Email address of the client',
+                description:
+                  'Email address of the client.',
               },
             },
             required: [
@@ -63,6 +84,7 @@ export class ChatService {
           },
         },
       },
+
       {
         type: 'function',
         function: {
@@ -75,7 +97,7 @@ export class ChatService {
               bookingId: {
                 type: 'string',
                 description:
-                  'The ID of the booking to cancel',
+                  'The ID of the booking to cancel.',
               },
             },
             required: ['bookingId'],
@@ -84,192 +106,328 @@ export class ChatService {
       },
     ];
 
-    const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
-      {
-        role: 'system',
-        content: `
+    let session = await this.prisma.session.findUnique({
+      where: {
+        id: sessionId,
+      },
+    });
+
+    let business = await this.prisma.business.findFirst();
+
+    if (!business) {
+      return 'No business is configured yet.';
+    }
+
+    if (!session) {
+      session = await this.prisma.session.create({
+        data: {
+          id: sessionId,
+          businessId: business.id,
+        },
+      });
+    } else {
+      business = await this.prisma.business.findUnique({
+        where: {
+          id: session.businessId,
+        },
+      });
+
+      if (!business) {
+        return 'The business associated with this session could not be found.';
+      }
+    }
+
+    await this.prisma.message.create({
+      data: {
+        sessionId: session.id,
+        role: 'user',
+        content: message.trim(),
+      },
+    });
+
+    const history = await this.prisma.message.findMany({
+      where: {
+        sessionId: session.id,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+
+    let knowledgeContext = '';
+
+    try {
+      knowledgeContext = await this.ragService.search(
+        session.businessId,
+        message.trim(),
+        5,
+      );
+    } catch (error) {
+      console.error('RAG search failed:', error);
+      knowledgeContext = '';
+    }
+
+    const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] =
+      [
+        {
+          role: 'system',
+          content: `
 You are a friendly receptionist for a salon called Glow Salon.
 
-Your job is to help customers check availability, book appointments, and cancel bookings.
+Your job is to help customers with:
+
+- Questions about the salon
+- Salon services
+- Salon policies
+- Pricing
+- Opening hours
+- Location
+- Appointment availability
+- Booking appointments
+- Cancelling appointments
+
+IMPORTANT KNOWLEDGE BASE RULE:
+
+You have access to a business knowledge base below.
+
+Use the knowledge base when answering questions about
+Glow Salon.
+
+KNOWLEDGE BASE:
+${knowledgeContext || 'No relevant knowledge was found.'}
+END KNOWLEDGE BASE.
+
+Rules:
+
+1. Use relevant information from the knowledge base.
+
+2. Do not invent salon services, prices, policies,
+   opening hours, location information, or other
+   business information.
+
+3. If the knowledge base does not contain the answer,
+   clearly tell the customer that you do not have
+   that information.
+
+4. Keep answers polite, helpful, and concise.
+
+IMPORTANT MEMORY RULE:
+
+This is a multi-turn conversation.
+
+Use previous conversation messages to remember
+information already provided by the customer.
+
+Do not ask for information that the customer
+already provided in the same session.
 
 BOOKING RULES:
 
-1. If the customer only asks about available times:
+1. If the customer asks about availability:
    - Use checkAvailability.
-   - Show the available appointment times clearly.
+   - Show available future appointment times.
 
-2. If the customer wants to BOOK a specific time and has already provided their name and email:
-   - Use checkAvailability first if you do not know the slot ID.
-   - After receiving the available slots, find the slot that best matches the customer's requested time.
-   - Use bookSlot with the exact slot ID, customer name, and customer email.
-   - Do NOT ask the customer for confirmation again when they have already clearly said they want to book.
+2. If the customer wants to book:
+   - Check conversation history for name and email.
+   - Ask for missing information.
+   - Use checkAvailability if necessary.
+   - Find the requested slot.
+   - Use bookSlot with the exact slot ID.
 
-3. If the customer wants to book but has not provided their name:
-   - Ask for their name.
+3. Do not ask for confirmation when the customer
+   has clearly requested the booking.
 
-4. If the customer wants to book but has not provided their email:
-   - Ask for their email.
+4. If requested time is unavailable:
+   - Do not automatically book another time.
+   - Show available alternatives.
 
-5. If the requested appointment time is not available:
-   - Do not attempt to book another time without telling the customer.
-   - Tell the customer that the requested time is unavailable.
-   - Show the available alternatives.
+5. Never invent a slot ID.
 
-6. Never invent a slot ID.
+6. Never invent a booking ID.
 
-7. Never invent a booking ID.
-
-8. After a successful booking:
-   - Clearly tell the customer that the appointment is confirmed.
+7. After successful booking:
+   - Tell the customer the booking is confirmed.
    - Provide the real booking ID returned by bookSlot.
 
-9. Never claim that an appointment was booked unless bookSlot returns success: true.
+8. Never claim a booking succeeded unless
+   bookSlot returns success: true.
 
-10. If the customer wants to cancel a booking:
-    - Use cancelSlot with the provided booking ID.
+CANCELLATION RULES:
 
-11. If a tool returns success: false:
-    - Do not claim that the operation succeeded.
-    - Explain the failure clearly to the customer.
+9. If the customer wants to cancel:
+   - Ask for the booking ID if it was not provided.
+   - Use cancelSlot with the real booking ID.
 
-12. Always be polite and concise.
+10. Never invent a booking ID.
+
+11. If cancelSlot returns success: false,
+    do not claim cancellation succeeded.
 
 EMAIL RULE:
 
-If an email contains Markdown formatting such as:
+If an email contains Markdown such as:
 
-[name@example.com](mailto:name@example.com)
+[sam@example.com](mailto:sam@example.com)
 
-extract only the actual email address before passing it to bookSlot.
+extract only:
+
+sam@example.com
+
+before passing it to bookSlot.
 `,
-      },
-      {
-        role: 'user',
-        content: message,
-      },
-    ];
+        },
+      ];
 
-    /*
-     * Allow multiple tool calls in the same request.
-     *
-     * Example:
-     *
-     * checkAvailability
-     *        ↓
-     * find requested slot
-     *        ↓
-     * bookSlot
-     *        ↓
-     * final AI response
-     */
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const response =
-        await this.groq.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          messages,
-          tools,
-          tool_choice: 'auto',
+    for (const item of history) {
+      if (
+        item.role === 'user' ||
+        item.role === 'assistant'
+      ) {
+        messages.push({
+          role: item.role as 'user' | 'assistant',
+          content: item.content,
         });
-
-      const choice = response.choices[0];
-
-      if (!choice) {
-        return 'Sorry, I could not generate a reply.';
       }
+    }
 
-      const toolCalls = choice.message.tool_calls;
-
-      /*
-       * No more tools are required.
-       * Return the AI's final response.
-       */
-      if (!toolCalls || toolCalls.length === 0) {
-        return (
-          choice.message.content ??
-          'Sorry, I could not generate a reply.'
-        );
-      }
-
-      /*
-       * Add the assistant's tool-call message
-       * to the conversation.
-       */
-      messages.push(choice.message);
-
-      /*
-       * Process every requested tool call.
-       */
-      for (const toolCall of toolCalls) {
-        let toolResult: string;
-
-        try {
-          if (
-            toolCall.function.name ===
-            'checkAvailability'
-          ) {
-            toolResult =
-              await this.checkAvailability();
-          } else if (
-            toolCall.function.name === 'bookSlot'
-          ) {
-            toolResult = await this.bookSlot(
-              toolCall.function.arguments,
-            );
-          } else if (
-            toolCall.function.name === 'cancelSlot'
-          ) {
-            toolResult = await this.cancelSlot(
-              toolCall.function.arguments,
-            );
-          } else {
-            toolResult = JSON.stringify({
-              success: false,
-              message: 'Unknown tool requested.',
-            });
-          }
-        } catch (error) {
-          console.error(
-            `Tool ${toolCall.function.name} failed:`,
-            error,
-          );
-
-          toolResult = JSON.stringify({
-            success: false,
-            message:
-              'The requested operation failed. Please try again.',
+    for (
+      let attempt = 0;
+      attempt < 5;
+      attempt++
+    ) {
+      try {
+        const response =
+          await this.groq.chat.completions.create({
+            model: 'openai/gpt-oss-20b',
+            messages,
+            tools,
+            tool_choice: 'auto',
           });
+
+        const choice = response.choices[0];
+
+        if (!choice) {
+          return 'Sorry, I could not generate a reply.';
         }
 
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: toolResult,
-        });
+        const toolCalls = choice.message.tool_calls;
+
+        if (
+          !toolCalls ||
+          toolCalls.length === 0
+        ) {
+          const finalReply =
+            choice.message.content ??
+            'Sorry, I could not generate a reply.';
+
+          await this.prisma.message.create({
+            data: {
+              sessionId: session.id,
+              role: 'assistant',
+              content: finalReply,
+            },
+          });
+
+          return finalReply;
+        }
+
+        messages.push(choice.message);
+
+        for (const toolCall of toolCalls) {
+          let toolResult: string;
+
+          try {
+            if (
+              toolCall.function.name ===
+              'checkAvailability'
+            ) {
+              toolResult =
+                await this.checkAvailability(
+                  session.businessId,
+                );
+            } else if (
+              toolCall.function.name ===
+              'bookSlot'
+            ) {
+              toolResult =
+                await this.bookSlot(
+                  toolCall.function.arguments,
+                  session.businessId,
+                );
+            } else if (
+              toolCall.function.name ===
+              'cancelSlot'
+            ) {
+              toolResult =
+                await this.cancelSlot(
+                  toolCall.function.arguments,
+                  session.businessId,
+                );
+            } else {
+              toolResult = JSON.stringify({
+                success: false,
+                message:
+                  'Unknown tool requested.',
+              });
+            }
+          } catch (error) {
+            console.error(
+              `Tool ${toolCall.function.name} failed:`,
+              error,
+            );
+
+            toolResult = JSON.stringify({
+              success: false,
+              message:
+                'The requested operation failed. Please try again.',
+            });
+          }
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: toolResult,
+          });
+        }
+      } catch (error) {
+        console.error(
+          'Groq request failed:',
+          error,
+        );
+
+        return 'Sorry, I could not process your request right now. Please try again.';
       }
     }
 
     return 'Sorry, I could not complete your request. Please try again.';
   }
 
-  /**
-   * Get available appointment slots.
-   */
-  private async checkAvailability(): Promise<string> {
+  private async checkAvailability(
+    businessId: string,
+  ): Promise<string> {
     try {
-      const slots = await this.prisma.slot.findMany({
-        where: {
-          isBooked: false,
-        },
-        orderBy: {
-          startTime: 'asc',
-        },
-        take: 10,
-      });
+      const now = new Date();
+
+      const slots =
+        await this.prisma.slot.findMany({
+          where: {
+            businessId,
+            isBooked: false,
+            startTime: {
+              gt: now,
+            },
+          },
+          orderBy: {
+            startTime: 'asc',
+          },
+          take: 10,
+        });
 
       if (slots.length === 0) {
         return JSON.stringify({
           success: false,
-          message: 'No available slots at the moment.',
+          message:
+            'No future available slots at the moment.',
           slots: [],
         });
       }
@@ -290,24 +448,16 @@ extract only the actual email address before passing it to bookSlot.
 
       return JSON.stringify({
         success: false,
-        message: 'Could not check availability.',
+        message:
+          'Could not check availability.',
         slots: [],
       });
     }
   }
 
-  /**
-   * Book an appointment slot.
-   *
-   * Important:
-   * Booking.slotId is @unique in Prisma.
-   *
-   * Therefore, if a previous booking for this slot
-   * was cancelled, we reuse that cancelled booking
-   * instead of creating a second Booking record.
-   */
   private async bookSlot(
     argumentsString: string,
+    businessId: string,
   ): Promise<string> {
     try {
       const args = JSON.parse(
@@ -318,11 +468,14 @@ extract only the actual email address before passing it to bookSlot.
         clientEmail?: string;
       };
 
-      const slotId = args.slotId?.trim();
-      const clientName = args.clientName?.trim();
-      const clientEmail = this.cleanEmail(
-        args.clientEmail,
-      );
+      const slotId =
+        args.slotId?.trim();
+
+      const clientName =
+        args.clientName?.trim();
+
+      const clientEmail =
+        this.cleanEmail(args.clientEmail);
 
       if (
         !slotId ||
@@ -336,9 +489,6 @@ extract only the actual email address before passing it to bookSlot.
         });
       }
 
-      /*
-       * Find the requested slot.
-       */
       const slot =
         await this.prisma.slot.findUnique({
           where: {
@@ -353,10 +503,16 @@ extract only the actual email address before passing it to bookSlot.
         });
       }
 
-      /*
-       * If the slot is currently booked,
-       * reject the booking.
-       */
+      if (
+        slot.businessId !== businessId
+      ) {
+        return JSON.stringify({
+          success: false,
+          message:
+            'This appointment slot is not available for this business.',
+        });
+      }
+
       if (slot.isBooked) {
         return JSON.stringify({
           success: false,
@@ -365,13 +521,14 @@ extract only the actual email address before passing it to bookSlot.
         });
       }
 
-      /*
-       * Check whether a Booking record already exists
-       * for this slot.
-       *
-       * This can happen when a previous booking was
-       * cancelled.
-       */
+      if (slot.startTime <= new Date()) {
+        return JSON.stringify({
+          success: false,
+          message:
+            'Sorry, that appointment slot is in the past.',
+        });
+      }
+
       const existingBooking =
         await this.prisma.booking.findUnique({
           where: {
@@ -379,34 +536,24 @@ extract only the actual email address before passing it to bookSlot.
           },
         });
 
-      /*
-       * Find an existing client for this business.
-       */
       let client =
         await this.prisma.client.findFirst({
           where: {
             email: clientEmail,
-            businessId: slot.businessId,
+            businessId,
           },
         });
 
-      /*
-       * Create the client if they don't exist.
-       */
       if (!client) {
         client =
           await this.prisma.client.create({
             data: {
               name: clientName,
               email: clientEmail,
-              businessId: slot.businessId,
+              businessId,
             },
           });
       } else {
-        /*
-         * Update the client's information if
-         * the customer already exists.
-         */
         client =
           await this.prisma.client.update({
             where: {
@@ -421,10 +568,6 @@ extract only the actual email address before passing it to bookSlot.
 
       let booking;
 
-      /*
-       * If a previous booking exists for this slot,
-       * it must be cancelled before it can be reused.
-       */
       if (existingBooking) {
         if (
           existingBooking.status !==
@@ -437,9 +580,6 @@ extract only the actual email address before passing it to bookSlot.
           });
         }
 
-        /*
-         * Reuse the cancelled booking.
-         */
         booking =
           await this.prisma.booking.update({
             where: {
@@ -451,10 +591,6 @@ extract only the actual email address before passing it to bookSlot.
             },
           });
       } else {
-        /*
-         * No previous booking exists,
-         * so create a new booking.
-         */
         booking =
           await this.prisma.booking.create({
             data: {
@@ -465,9 +601,6 @@ extract only the actual email address before passing it to bookSlot.
           });
       }
 
-      /*
-       * Mark the slot as booked.
-       */
       await this.prisma.slot.update({
         where: {
           id: slot.id,
@@ -478,15 +611,13 @@ extract only the actual email address before passing it to bookSlot.
       });
 
       /*
-       * Send confirmation email.
-       *
-       * EmailService handles its own errors,
-       * so a failed email does not undo the booking.
+       * Send booking confirmation email.
        */
       await this.emailService.sendBookingConfirmation(
         clientEmail,
         clientName,
         slot.startTime,
+        booking.id,
       );
 
       return JSON.stringify({
@@ -513,11 +644,9 @@ extract only the actual email address before passing it to bookSlot.
     }
   }
 
-  /**
-   * Cancel an existing booking.
-   */
   private async cancelSlot(
     argumentsString: string,
+    businessId: string,
   ): Promise<string> {
     try {
       const args = JSON.parse(
@@ -537,26 +666,36 @@ extract only the actual email address before passing it to bookSlot.
         });
       }
 
-      /*
-       * Find the booking.
-       */
       const booking =
         await this.prisma.booking.findUnique({
           where: {
             id: bookingId,
+          },
+          include: {
+            client: true,
+            slot: true,
           },
         });
 
       if (!booking) {
         return JSON.stringify({
           success: false,
-          message: 'Booking not found.',
+          message:
+            'Booking not found.',
         });
       }
 
-      /*
-       * Prevent cancelling the same booking twice.
-       */
+      if (
+        booking.slot.businessId !==
+        businessId
+      ) {
+        return JSON.stringify({
+          success: false,
+          message:
+            'This booking does not belong to this business.',
+        });
+      }
+
       if (
         booking.status === 'cancelled'
       ) {
@@ -567,9 +706,6 @@ extract only the actual email address before passing it to bookSlot.
         });
       }
 
-      /*
-       * Free the slot.
-       */
       await this.prisma.slot.update({
         where: {
           id: booking.slotId,
@@ -579,12 +715,6 @@ extract only the actual email address before passing it to bookSlot.
         },
       });
 
-      /*
-       * Keep the booking record but mark it cancelled.
-       *
-       * This allows bookSlot() to reuse it later
-       * because slotId is unique.
-       */
       await this.prisma.booking.update({
         where: {
           id: bookingId,
@@ -593,6 +723,23 @@ extract only the actual email address before passing it to bookSlot.
           status: 'cancelled',
         },
       });
+
+      /*
+       * Send cancellation email only if
+       * the client has an email address.
+       */
+      if (booking.client.email) {
+        await this.emailService.sendCancellationEmail(
+          booking.client.email,
+          booking.client.name,
+          booking.slot.startTime,
+          booking.id,
+        );
+      } else {
+        console.warn(
+          `No email address found for cancelled booking ${booking.id}`,
+        );
+      }
 
       return JSON.stringify({
         success: true,
@@ -614,17 +761,6 @@ extract only the actual email address before passing it to bookSlot.
     }
   }
 
-  /**
-   * Clean email addresses returned by the AI.
-   *
-   * Handles:
-   *
-   * [john@example.com](mailto:john@example.com)
-   *
-   * mailto:john@example.com
-   *
-   * john@example.com
-   */
   private cleanEmail(
     email?: string,
   ): string {
@@ -632,43 +768,40 @@ extract only the actual email address before passing it to bookSlot.
       return '';
     }
 
-    let cleaned = email.trim();
+    let cleaned =
+      email.trim();
 
-    /*
-     * Convert Markdown email:
-     *
-     * [john@example.com](mailto:john@example.com)
-     *
-     * into:
-     *
-     * john@example.com
-     */
     const markdownMatch =
       cleaned.match(
         /^\[([^\]]+)\]\(mailto:([^)]+)\)$/i,
       );
 
     if (markdownMatch) {
-      cleaned = markdownMatch[2];
+      cleaned =
+        markdownMatch[2];
     }
 
-    /*
-     * Remove mailto: if present.
-     */
-    cleaned = cleaned.replace(
-      /^mailto:/i,
-      '',
-    );
+    cleaned =
+      cleaned.replace(
+        /^mailto:/i,
+        '',
+      );
 
-    /*
-     * Remove accidental surrounding
-     * characters.
-     */
-    cleaned = cleaned
-      .replace(/[<>\[\]]/g, '')
-      .trim();
+    cleaned =
+      cleaned
+        .replace(
+          /[<>\[\]]/g,
+          '',
+        )
+        .trim();
+
+    const emailPattern =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(cleaned)) {
+      return '';
+    }
 
     return cleaned;
   }
 }
-
