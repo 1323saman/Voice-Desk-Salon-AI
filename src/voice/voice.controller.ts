@@ -1,21 +1,20 @@
 import {
   Body,
   Controller,
+  HttpCode,
+  HttpStatus,
   Post,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBody,
   ApiConsumes,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-
-import { FileInterceptor } from '@nestjs/platform-express';
-
-import type { Express } from 'express';
 
 import { ChatService } from '../chat/chat.service';
 import { DeepgramService } from '../deepgram/deepgram.service';
@@ -29,168 +28,110 @@ export class VoiceController {
   ) {}
 
   @Post()
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('audio'))
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary:
-      'Send voice message and receive AI voice response',
+      'Send a voice message to the AI receptionist and get a text reply',
+    description:
+      'Accepts an audio file, transcribes it using Deepgram, then routes the transcribed text through the same chat logic used for text messages.',
   })
-  @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
         sessionId: {
           type: 'string',
-          example: 'voice-test-001',
+          description: 'Session ID used to track conversation history.',
         },
-
         audio: {
           type: 'string',
           format: 'binary',
+          description: 'Audio file containing the customer message.',
         },
       },
-
-      required: [
-        'sessionId',
-        'audio',
-      ],
+      required: ['sessionId', 'audio'],
     },
   })
-  @UseInterceptors(
-    FileInterceptor('audio'),
-  )
-  async handleVoice(
-    @UploadedFile()
-    audio: Express.Multer.File,
-
-    @Body('sessionId')
-    sessionId: string,
+  @ApiResponse({
+    status: 200,
+    description:
+      'AI receptionist successfully transcribed and processed the voice message.',
+    schema: {
+      example: {
+        success: true,
+        transcript: 'Do you have any slots open this week?',
+        reply: 'Here are the available times this week...',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid request. The audio file or session ID is missing.',
+  })
+  @ApiResponse({
+    status: 500,
+    description:
+      'Internal server error while processing the voice message.',
+  })
+  async sendVoiceMessage(
+    @Body('sessionId') sessionId: string,
+    @UploadedFile() audio: Express.Multer.File,
   ) {
-    if (!sessionId?.trim()) {
-      return {
-        success: false,
-        transcript: '',
-        reply: 'Session ID is required.',
-        audioBase64: null,
-      };
-    }
-
-    if (!audio) {
-      return {
-        success: false,
-        transcript: '',
-        reply:
-          'Please provide an audio file.',
-        audioBase64: null,
-      };
-    }
-
     try {
-      console.log(
-        '====================================',
-      );
-
-      console.log(
-        'VOICE REQUEST RECEIVED',
-      );
-
-      console.log(
-        `Session: ${sessionId}`,
-      );
-
-      console.log(
-        `File: ${audio.originalname}`,
-      );
-
-      console.log(
-        `MIME: ${audio.mimetype}`,
-      );
-
-      console.log(
-        `Size: ${audio.size} bytes`,
-      );
-
-      console.log(
-        '====================================',
-      );
-
-      /*
-       * Speech → Text
-       */
-      const transcript =
-        await this.deepgramService.transcribeAudio(
-          audio.buffer,
-        );
-
-      if (!transcript.trim()) {
+      if (!sessionId?.trim()) {
         return {
           success: false,
-          transcript: '',
-          reply:
-            "Sorry, I couldn't hear that clearly. Please try again.",
-          audioBase64: null,
+          message: 'A session ID is required.',
         };
       }
 
-      console.log(
-        `Transcript: ${transcript}`,
+      if (!audio) {
+        return {
+          success: false,
+          message: 'An audio file is required.',
+        };
+      }
+
+      const transcript = await this.deepgramService.transcribeAudio(
+        audio.buffer,
       );
 
-      /*
-       * Send transcript to existing
-       * AI/chat system.
-       */
-      const reply =
-        await this.chatService.getReply(
-          sessionId,
-          transcript,
-        );
+      if (!transcript?.trim()) {
+        return {
+          success: false,
+          message: 'Could not transcribe the audio. Please try again.',
+        };
+      }
 
-      console.log(
-        `AI Reply: ${reply}`,
+      const reply = await this.chatService.getReply(
+        sessionId,
+        transcript,
       );
 
-      /*
-       * AI text → Speech
-       */
-      const audioBuffer =
-        await this.deepgramService.textToSpeech(
+      let replyAudioBase64: string | null = null;
+
+      try {
+        const replyAudioBuffer = await this.deepgramService.textToSpeech(
           reply,
         );
-
-      console.log(
-        `TTS Audio: ${audioBuffer.length} bytes`,
-      );
-
-      /*
-       * Convert MP3 to Base64.
-       */
-      const audioBase64 =
-        audioBuffer.toString(
-          'base64',
-        );
+        replyAudioBase64 = replyAudioBuffer.toString('base64');
+      } catch (ttsError) {
+        console.error('Text-to-speech failed:', ttsError);
+        // Voice reply generation is best-effort; text reply still returns.
+      }
 
       return {
         success: true,
-
         transcript,
-
         reply,
-
-        audioBase64,
+        replyAudioBase64,
       };
     } catch (error) {
-      console.error(
-        'Voice request failed:',
-        error,
-      );
-
-      return {
-        success: false,
-        transcript: '',
-        reply:
-          'Sorry, I could not process your voice message.',
-        audioBase64: null,
-      };
+      console.error('VOICE ERROR:', error);
+      throw error;
     }
   }
 }

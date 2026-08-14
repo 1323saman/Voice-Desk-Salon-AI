@@ -1,33 +1,28 @@
-
 import { PrismaClient } from '../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
+// ---- Config: tweak these to match your real business hours ----
+const DAYS_AHEAD = 30; // how many calendar days forward to generate slots for
+const SLOT_DURATION_MINUTES = 30;
+const BUSINESS_START_HOUR = 9; // 9 AM
+const BUSINESS_END_HOUR = 17; // 5 PM
+const SKIP_WEEKENDS = true;
+const TIMEZONE_OFFSET = '+05:00'; // match your business's timezone
+
 async function main() {
-  const connectionString =
-    process.env.DATABASE_URL;
+  const connectionString = process.env.DATABASE_URL;
 
   if (!connectionString) {
-    throw new Error(
-      'DATABASE_URL is not configured.',
-    );
+    throw new Error('DATABASE_URL is not configured.');
   }
 
-  const adapter = new PrismaPg({
-    connectionString,
-  });
-
-  const prisma = new PrismaClient({
-    adapter,
-  });
+  const adapter = new PrismaPg({ connectionString });
+  const prisma = new PrismaClient({ adapter });
 
   try {
-    console.log(
-      'Creating test appointment slots...',
-    );
+    console.log('Creating appointment slots...');
 
-    // Find the first business
-    const business =
-      await prisma.business.findFirst();
+    const business = await prisma.business.findFirst();
 
     if (!business) {
       throw new Error(
@@ -35,101 +30,90 @@ async function main() {
       );
     }
 
-    console.log(
-      `Using business: ${business.name}`,
-    );
+    console.log(`Using business: ${business.name}`);
+    console.log(`Business ID: ${business.id}`);
 
-    console.log(
-      `Business ID: ${business.id}`,
-    );
+    const slots: { startTime: Date; endTime: Date }[] = [];
+    const today = new Date();
 
-    // Test appointment slots
-    const slots = [
-      {
-        startTime: new Date(
-          '2026-08-10T20:53:00+05:00',
-        ),
-        endTime: new Date(
-          '2026-08-10T21:23:00+05:00',
-        ),
-      },
-      {
-        startTime: new Date(
-          '2026-08-10T21:33:00+05:00',
-        ),
-        endTime: new Date(
-          '2026-08-10T22:03:00+05:00',
-        ),
-      },
-      {
-        startTime: new Date(
-          '2026-08-10T22:13:00+05:00',
-        ),
-        endTime: new Date(
-          '2026-08-10T22:43:00+05:00',
-        ),
-      },
-      {
-        startTime: new Date(
-          '2026-08-10T22:53:00+05:00',
-        ),
-        endTime: new Date(
-          '2026-08-10T23:23:00+05:00',
-        ),
-      },
-    ];
+    for (let dayOffset = 0; dayOffset < DAYS_AHEAD; dayOffset++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() + dayOffset);
 
-    for (const slot of slots) {
-      const existingSlot =
-        await prisma.slot.findFirst({
-          where: {
-            businessId: business.id,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-          },
-        });
-
-      if (existingSlot) {
-        console.log(
-          `Slot already exists: ${slot.startTime.toLocaleString()}`,
-        );
-
+      const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+      if (SKIP_WEEKENDS && (dayOfWeek === 0 || dayOfWeek === 6)) {
         continue;
       }
 
-      const createdSlot =
-        await prisma.slot.create({
-          data: {
-            businessId: business.id,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-            isBooked: false,
-          },
-        });
+      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
 
-      console.log(
-        `Created slot: ${createdSlot.id}`,
-      );
+      for (
+        let minutes = BUSINESS_START_HOUR * 60;
+        minutes < BUSINESS_END_HOUR * 60;
+        minutes += SLOT_DURATION_MINUTES
+      ) {
+        const hour = Math.floor(minutes / 60)
+          .toString()
+          .padStart(2, '0');
+        const minute = (minutes % 60).toString().padStart(2, '0');
 
-      console.log(
-        `Time: ${createdSlot.startTime.toLocaleString()} - ${createdSlot.endTime.toLocaleString()}`,
-      );
+        const startTime = new Date(
+          `${dateStr}T${hour}:${minute}:00${TIMEZONE_OFFSET}`,
+        );
+        const endTime = new Date(
+          startTime.getTime() + SLOT_DURATION_MINUTES * 60000,
+        );
+
+        // Skip slots that are already in the past (relevant for today only)
+        if (startTime.getTime() < Date.now()) {
+          continue;
+        }
+
+        slots.push({ startTime, endTime });
+      }
+    }
+
+    console.log(`Generated ${slots.length} candidate slots.`);
+
+    let created = 0;
+    let skipped = 0;
+
+    for (const slot of slots) {
+      const existingSlot = await prisma.slot.findFirst({
+        where: {
+          businessId: business.id,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        },
+      });
+
+      if (existingSlot) {
+        skipped++;
+        continue;
+      }
+
+      await prisma.slot.create({
+        data: {
+          businessId: business.id,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          isBooked: false,
+        },
+      });
+
+      created++;
     }
 
     console.log('');
-    console.log(
-      'Test appointment slots created successfully.',
-    );
+    console.log(`Created ${created} new slots.`);
+    console.log(`Skipped ${skipped} slots (already existed).`);
+    console.log('Done.');
   } finally {
     await prisma.$disconnect();
   }
 }
 
 main().catch((error) => {
-  console.error(
-    'Failed to create test slots:',
-    error,
-  );
-
+  console.error('Failed to create test slots:', error);
   process.exit(1);
 });
