@@ -23,6 +23,12 @@ export class ChatService {
     sessionId: string,
     message: string,
   ): Promise<string> {
+    /*
+     * ------------------------------------------------------------
+     * BASIC VALIDATION
+     * ------------------------------------------------------------
+     */
+
     if (!process.env.GROQ_API_KEY) {
       console.error('GROQ_API_KEY is not configured.');
       return 'The AI service is not configured correctly.';
@@ -35,6 +41,14 @@ export class ChatService {
     if (!message?.trim()) {
       return 'Please enter a message.';
     }
+
+    const userMessage = message.trim();
+
+    /*
+     * ------------------------------------------------------------
+     * TOOLS
+     * ------------------------------------------------------------
+     */
 
     const tools: Groq.Chat.Completions.ChatCompletionTool[] = [
       {
@@ -106,6 +120,12 @@ export class ChatService {
       },
     ];
 
+    /*
+     * ------------------------------------------------------------
+     * FIND SESSION
+     * ------------------------------------------------------------
+     */
+
     let session = await this.prisma.session.findUnique({
       where: {
         id: sessionId,
@@ -137,46 +157,71 @@ export class ChatService {
       }
     }
 
+    /*
+     * ------------------------------------------------------------
+     * SAVE USER MESSAGE
+     * ------------------------------------------------------------
+     */
+
     await this.prisma.message.create({
       data: {
         sessionId: session.id,
         role: 'user',
-        content: message.trim(),
+        content: userMessage,
       },
     });
+
+    /*
+     * ------------------------------------------------------------
+     * LOAD ONLY RECENT HISTORY
+     *
+     * This prevents the entire conversation from being sent
+     * to Groq every time.
+     * ------------------------------------------------------------
+     */
 
     const history = await this.prisma.message.findMany({
       where: {
         sessionId: session.id,
       },
       orderBy: {
-        createdAt: 'asc',
+        createdAt: 'desc',
       },
+      take: 10,
     });
+
+    history.reverse();
+
+    /*
+     * ------------------------------------------------------------
+     * RAG / KNOWLEDGE BASE
+     * ------------------------------------------------------------
+     */
 
     let knowledgeContext = '';
 
     try {
       knowledgeContext = await this.ragService.search(
         session.businessId,
-        message.trim(),
-        5,
+        userMessage,
+        3,
       );
     } catch (error) {
       console.error('RAG search failed:', error);
       knowledgeContext = '';
     }
 
-    const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] =
-      [
-        {
-          role: 'system',
-          content: `
-You are a friendly receptionist for a salon called Glow Salon.
+    /*
+     * ------------------------------------------------------------
+     * SYSTEM PROMPT
+     * ------------------------------------------------------------
+     */
+
+    const systemPrompt = `
+You are a friendly AI receptionist for a salon called Glow Salon.
 
 Your job is to help customers with:
 
-- Questions about the salon
 - Salon services
 - Salon policies
 - Pricing
@@ -186,82 +231,78 @@ Your job is to help customers with:
 - Booking appointments
 - Cancelling appointments
 
-IMPORTANT KNOWLEDGE BASE RULE:
-
-You have access to a business knowledge base below.
-
-Use the knowledge base when answering questions about
-Glow Salon.
-
 KNOWLEDGE BASE:
+
 ${knowledgeContext || 'No relevant knowledge was found.'}
+
 END KNOWLEDGE BASE.
 
-Rules:
+KNOWLEDGE BASE RULES:
 
-1. Use relevant information from the knowledge base.
+1. Use the knowledge base when answering questions about Glow Salon.
 
 2. Do not invent salon services, prices, policies,
-   opening hours, location information, or other
-   business information.
+opening hours, location information, or other business information.
 
 3. If the knowledge base does not contain the answer,
-   clearly tell the customer that you do not have
-   that information.
+clearly tell the customer that you do not have that information.
 
 4. Keep answers polite, helpful, and concise.
 
-IMPORTANT MEMORY RULE:
+5. For voice conversations, normally answer in 1-3 short sentences.
 
-This is a multi-turn conversation.
+6. Do not use Markdown in voice responses.
 
-Use previous conversation messages to remember
-information already provided by the customer.
+7. Do not provide unnecessary explanations.
 
-Do not ask for information that the customer
-already provided in the same session.
+MEMORY RULES:
+
+8. This is a multi-turn conversation.
+
+9. Use recent conversation history to remember information
+already provided by the customer.
+
+10. Do not ask for information that the customer already provided.
 
 BOOKING RULES:
 
-1. If the customer asks about availability:
-   - Use checkAvailability.
-   - Show available future appointment times.
+11. If the customer asks about appointment availability,
+use checkAvailability.
 
-2. If the customer wants to book:
-   - Check conversation history for name and email.
+12. If the customer wants to book:
+   - Check conversation history for their name and email.
    - Ask for missing information.
    - Use checkAvailability if necessary.
    - Find the requested slot.
    - Use bookSlot with the exact slot ID.
 
-3. Do not ask for confirmation when the customer
-   has clearly requested the booking.
+13. Do not ask for confirmation when the customer has clearly
+requested the booking.
 
-4. If requested time is unavailable:
-   - Do not automatically book another time.
-   - Show available alternatives.
+14. If the requested time is unavailable,
+show available alternatives.
 
-5. Never invent a slot ID.
+15. Never invent a slot ID.
 
-6. Never invent a booking ID.
+16. Never invent a booking ID.
 
-7. After successful booking:
+17. After successful booking:
    - Tell the customer the booking is confirmed.
    - Provide the real booking ID returned by bookSlot.
 
-8. Never claim a booking succeeded unless
-   bookSlot returns success: true.
+18. Never claim a booking succeeded unless bookSlot returns
+success: true.
 
 CANCELLATION RULES:
 
-9. If the customer wants to cancel:
+19. If the customer wants to cancel:
    - Ask for the booking ID if it was not provided.
    - Use cancelSlot with the real booking ID.
 
-10. Never invent a booking ID.
+20. Never invent a booking ID.
 
-11. If cancelSlot returns success: false,
-    do not claim cancellation succeeded.
+21. If cancelSlot returns success: false,
+do not claim cancellation succeeded.
 
 EMAIL RULE:
 
@@ -274,7 +315,19 @@ extract only:
 sam@example.com
 
 before passing it to bookSlot.
-`,
+`;
+
+    /*
+     * ------------------------------------------------------------
+     * BUILD GROQ MESSAGES
+     * ------------------------------------------------------------
+     */
+
+    const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] =
+      [
+        {
+          role: 'system',
+          content: systemPrompt,
         },
       ];
 
@@ -290,36 +343,63 @@ before passing it to bookSlot.
       }
     }
 
-    for (
-      let attempt = 0;
-      attempt < 5;
-      attempt++
-    ) {
+    /*
+     * ------------------------------------------------------------
+     * GROQ + TOOL LOOP
+     *
+     * Maximum 5 rounds prevents an accidental infinite loop.
+     * ------------------------------------------------------------
+     */
+
+    for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const response =
           await this.groq.chat.completions.create({
             model: 'openai/gpt-oss-20b',
+
             messages,
+
             tools,
+
             tool_choice: 'auto',
+
+            /*
+             * Keep AI answers short.
+             * This is especially important for voice.
+             */
+            max_completion_tokens: 300,
           });
 
-        const choice = response.choices[0];
+        const choice = response.choices?.[0];
 
         if (!choice) {
+          console.error(
+            'Groq returned no choices.',
+          );
+
           return 'Sorry, I could not generate a reply.';
         }
 
-        const toolCalls = choice.message.tool_calls;
+        const toolCalls =
+          choice.message.tool_calls;
+
+        /*
+         * --------------------------------------------------------
+         * NORMAL AI RESPONSE
+         * --------------------------------------------------------
+         */
 
         if (
           !toolCalls ||
           toolCalls.length === 0
         ) {
           const finalReply =
-            choice.message.content ??
+            choice.message.content?.trim() ||
             'Sorry, I could not generate a reply.';
 
+          /*
+           * Save assistant response.
+           */
           await this.prisma.message.create({
             data: {
               sessionId: session.id,
@@ -330,6 +410,12 @@ before passing it to bookSlot.
 
           return finalReply;
         }
+
+        /*
+         * --------------------------------------------------------
+         * TOOL CALLS
+         * --------------------------------------------------------
+         */
 
         messages.push(choice.message);
 
@@ -389,18 +475,61 @@ before passing it to bookSlot.
             content: toolResult,
           });
         }
-      } catch (error) {
+
+        /*
+         * Continue loop so Groq can turn the tool result
+         * into the final customer-facing answer.
+         */
+      } catch (error: any) {
         console.error(
           'Groq request failed:',
           error,
         );
 
+        /*
+         * --------------------------------------------------------
+         * GROQ RATE LIMIT
+         * --------------------------------------------------------
+         */
+
+        if (error?.status === 429) {
+          console.error(
+            'Groq rate limit reached.',
+          );
+
+          /*
+           * Do NOT retry immediately.
+           *
+           * Your current error is a TPD (tokens per day)
+           * limit, so another request will fail too.
+           */
+          return 'I’m sorry, our AI assistant is temporarily unavailable. Please try again in a few minutes.';
+        }
+
+        /*
+         * --------------------------------------------------------
+         * OTHER GROQ ERRORS
+         * --------------------------------------------------------
+         */
+
         return 'Sorry, I could not process your request right now. Please try again.';
       }
     }
 
+    /*
+     * ------------------------------------------------------------
+     * TOOL LOOP LIMIT REACHED
+     * ------------------------------------------------------------
+     */
+
     return 'Sorry, I could not complete your request. Please try again.';
   }
+
+  /*
+   * ============================================================
+   * CHECK AVAILABILITY
+   * ============================================================
+   */
 
   private async checkAvailability(
     businessId: string,
@@ -454,6 +583,12 @@ before passing it to bookSlot.
       });
     }
   }
+
+  /*
+   * ============================================================
+   * BOOK SLOT
+   * ============================================================
+   */
 
   private async bookSlot(
     argumentsString: string,
@@ -644,6 +779,12 @@ before passing it to bookSlot.
     }
   }
 
+  /*
+   * ============================================================
+   * CANCEL SLOT
+   * ============================================================
+   */
+
   private async cancelSlot(
     argumentsString: string,
     businessId: string,
@@ -760,6 +901,12 @@ before passing it to bookSlot.
       });
     }
   }
+
+  /*
+   * ============================================================
+   * CLEAN EMAIL
+   * ============================================================
+   */
 
   private cleanEmail(
     email?: string,
